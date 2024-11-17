@@ -5,84 +5,102 @@ import NodeCache from 'node-cache';
 import { z } from 'zod';
 import crypto from 'crypto';
 
+// Initialize RSS parser and cache
 const parser = new Parser();
 const cache = new NodeCache({ stdTTL: 300 }); // 5 minutes cache
 
+// Schema for validating news articles
 const newsSchema = z.object({
   id: z.string(),
-  title: z.string(),
+  titre: z.string(),
   source: z.string(),
   date: z.string(),
-  content: z.string(),
+  contenu: z.string(),
   imageUrl: z.string().url(),
-  location: z.string(),
-  category: z.enum(['active', 'contained', 'prevention']),
+  localisation: z.string(),
+  categorie: z.enum(['incendie', 'autre']),
   url: z.string().url()
 });
 
-const NEWS_SOURCES = [
+// News sources with RSS and scraping options
+const SOURCES_ACTUALITÉS = [
   {
-    name: 'Algeria Press Service',
+    nom: 'Algérie Presse Service',
     url: 'https://www.echoroukonline.com/feed',
     type: 'rss'
   },
   {
-    name: 'El Watan',
+    nom: 'El Watan',
     url: 'https://www.elwatan.com',
-    type: 'scrape',
+    type: 'scraping',
     selector: '.article-item'
   }
 ];
 
-function generateId() {
+// Function to generate unique IDs
+function genererId() {
   return crypto.randomBytes(16).toString('hex');
 }
 
-function extractImageFromContent(content) {
-  if (!content) return 'https://images.unsplash.com/photo-1523875194681-bedd468c58bf';
-  const match = content.match(/<img[^>]+src="([^">]+)"/);
+// Extract image URL from content
+function extraireImageDepuisContenu(contenu) {
+  if (!contenu) return 'https://images.unsplash.com/photo-1523875194681-bedd468c58bf';
+  const match = contenu.match(/<img[^>]+src="([^">]+)"/);
   return match ? match[1] : 'https://images.unsplash.com/photo-1523875194681-bedd468c58bf';
 }
 
-function extractImageUrl($element) {
+// Extract image URL for scraped articles
+function extraireImageUrl($element) {
   const imgSrc = $element.find('img').attr('src');
   return imgSrc || 'https://images.unsplash.com/photo-1523875194681-bedd468c58bf';
 }
 
-function extractLocation(text) {
-  const algerianCities = [
-    'Algiers', 'Oran', 'Constantine', 'Batna', 'Djelfa', 'Sétif', 'Annaba', 'Sidi Bel Abbès',
+// Extract city or default location from text
+function extraireLocalisation(texte) {
+  const villesAlgeriennes = [
+    'Alger', 'Oran', 'Constantine', 'Batna', 'Djelfa', 'Sétif', 'Annaba', 'Sidi Bel Abbès',
     'Biskra', 'Tébessa', 'Tizi Ouzou', 'Béjaïa', 'Médéa'
   ];
-  
-  for (const city of algerianCities) {
-    if (text.includes(city)) return city;
+
+  for (const ville of villesAlgeriennes) {
+    if (texte.includes(ville)) return ville;
   }
-  
-  return 'Algeria';
+
+  return 'Algérie';
 }
 
-async function parseRSSFeed(source) {
+// Categorize news (focus on fire-related content)
+function categoriserActualités(titre, contenu) {
+  const texte = `${titre} ${contenu}`.toLowerCase();
+  if (texte.includes('incendie') || texte.includes('feu') || texte.includes('brûlure') || texte.includes('forêt')) {
+    return 'incendie';
+  }
+  return 'autre';
+}
+
+// Parse RSS feeds
+async function parseFluxRSS(source) {
   try {
-    const feed = await parser.parseURL(source.url);
-    return feed.items.map(item => ({
-      id: generateId(),
-      title: item.title,
-      source: source.name,
+    const flux = await parser.parseURL(source.url);
+    return flux.items.map(item => ({
+      id: genererId(),
+      titre: item.title,
+      source: source.nom,
       date: new Date(item.pubDate).toISOString(),
-      content: item.contentSnippet || item.content,
-      imageUrl: extractImageFromContent(item.content),
-      location: extractLocation(item.title + ' ' + (item.contentSnippet || item.content)),
-      category: categorizeNews(item.title, item.contentSnippet || item.content),
+      contenu: item.contentSnippet || item.content,
+      imageUrl: extraireImageDepuisContenu(item.content),
+      localisation: extraireLocalisation(item.title + ' ' + (item.contentSnippet || item.content)),
+      categorie: categoriserActualités(item.title, item.contentSnippet || item.content),
       url: item.link
     }));
   } catch (error) {
-    console.error(`Error parsing RSS feed from ${source.name}:`, error);
+    console.error(`Erreur lors du traitement du flux RSS de ${source.nom} :`, error);
     return [];
   }
 }
 
-async function scrapePage(source) {
+// Scrape web pages
+async function scraperPage(source) {
   try {
     const { data } = await axios.get(source.url);
     const $ = cheerio.load(data);
@@ -91,169 +109,94 @@ async function scrapePage(source) {
     $(source.selector).each((_, element) => {
       const $element = $(element);
       articles.push({
-        id: generateId(),
-        title: $element.find('h2').text().trim(),
-        source: source.name,
+        id: genererId(),
+        titre: $element.find('h2').text().trim(),
+        source: source.nom,
         date: new Date().toISOString(),
-        content: $element.find('p').text().trim(),
-        imageUrl: extractImageUrl($element),
-        location: extractLocation($element.text()),
-        category: categorizeNews($element.find('h2').text(), $element.find('p').text()),
+        contenu: $element.find('p').text().trim(),
+        imageUrl: extraireImageUrl($element),
+        localisation: extraireLocalisation($element.text()),
+        categorie: categoriserActualités($element.find('h2').text(), $element.find('p').text()),
         url: new URL($element.find('a').attr('href'), source.url).toString()
       });
     });
 
     return articles;
   } catch (error) {
-    console.error(`Error scraping ${source.name}:`, error);
+    console.error(`Erreur lors du scraping de ${source.nom} :`, error);
     return [];
   }
 }
 
-function categorizeNews(title, content) {
-  const text = `${title} ${content}`.toLowerCase();
-  if (text.includes('contained') || text.includes('controlled')) return 'contained';
-  if (text.includes('prevention') || text.includes('awareness')) return 'prevention';
-  return 'active';
-}
-
-export function setupNewsFeeds(io) {
-  async function fetchAndUpdateNews() {
+// Fetch and update fire-related news
+export function initialiserFluxActualités(io) {
+  async function recupererEtMettreAJourActualités() {
     try {
-      const allNews = [];
+      const toutesActualités = [];
 
-      for (const source of NEWS_SOURCES) {
-        const news = source.type === 'rss' 
-          ? await parseRSSFeed(source)
-          : await scrapePage(source);
-        
-        allNews.push(...news);
+      for (const source of SOURCES_ACTUALITÉS) {
+        const actualités = source.type === 'rss'
+          ? await parseFluxRSS(source)
+          : await scraperPage(source);
+
+        toutesActualités.push(...actualités);
       }
 
-      // Validate and filter news
-      const validNews = allNews
+      // Validate and filter fire-related news
+      const actualitésValides = toutesActualités
         .map(news => {
           try {
             return newsSchema.parse(news);
           } catch (error) {
-            console.error('Invalid news item:', error);
+            console.error('Article invalide :', error);
             return null;
           }
         })
         .filter(Boolean);
 
-      // Update cache
-      cache.set('news', validNews);
+      const actualitésIncendie = actualitésValides.filter(item => item.categorie === 'incendie');
 
-      // Emit new alerts
-      const currentNews = cache.get('news') || [];
-      const newAlerts = validNews.filter(
-        news => !currentNews.some(existing => existing.id === news.id)
+      // Update cache
+      cache.set('actualités', actualitésIncendie);
+
+      // Emit new fire alerts
+      const actualitésCourantes = cache.get('actualités') || [];
+      const nouvellesAlertes = actualitésIncendie.filter(
+        news => !actualitésCourantes.some(existant => existant.id === news.id)
       );
 
-      newAlerts.forEach(alert => {
-        io.emit('newAlert', alert);
+      nouvellesAlertes.forEach(alerte => {
+        io.emit('alerteIncendie', alerte);
       });
 
     } catch (error) {
-      console.error('Error updating news feeds:', error);
+      console.error('Erreur lors de la mise à jour des flux d’actualités :', error);
     }
   }
 
   // Initial fetch
-  fetchAndUpdateNews();
+  recupererEtMettreAJourActualités();
 
   // Update every 5 minutes
-  setInterval(fetchAndUpdateNews, 5 * 60 * 1000);
+  setInterval(recupererEtMettreAJourActualités, 5 * 60 * 1000);
 }
 
-export function getNews(search, category) {
-  let news = cache.get('news') || [];
+// Get fire-related news
+export function obtenirActualités(recherche, categorie = 'incendie') {
+  let actualités = cache.get('actualités') || [];
 
-  if (search) {
-    const searchLower = search.toLowerCase();
-    news = news.filter(item =>
-      item.title.toLowerCase().includes(searchLower) ||
-      item.content.toLowerCase().includes(searchLower) ||
-      item.location.toLowerCase().includes(searchLower)
+  if (recherche) {
+    const rechercheMinuscule = recherche.toLowerCase();
+    actualités = actualités.filter(item =>
+      item.titre.toLowerCase().includes(rechercheMinuscule) ||
+      item.contenu.toLowerCase().includes(rechercheMinuscule) ||
+      item.localisation.toLowerCase().includes(rechercheMinuscule)
     );
   }
 
-  if (category && category !== 'all') {
-    news = news.filter(item => item.category === category);
+  if (categorie && categorie !== 'tout') {
+    actualités = actualités.filter(item => item.categorie === categorie);
   }
 
-  return news;
+  return actualités;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// // services/newsService.ts
-// import Parser from 'rss-parser';
-// import axios from 'axios';
-// import cheerio from 'cheerio';
-
-// const NEWS_SOURCES = [
-//   {
-//     name: 'Algeria Press Service',
-//     url: 'http://www.aps.dz/en/feed',
-//     type: 'rss'
-//   },
-//   {
-//     name: 'Echorouk Online',
-//     url: 'https://www.echoroukonline.com',
-//     type: 'scrape',
-//     selector: '.article'
-//   },
-//   {
-//     name: 'El Watan',
-//     url: 'https://www.elwatan.com',
-//     type: 'scrape',
-//     selector: '.article-item'
-//   },
-//   // Add more sources as needed
-// ];
-
-// // Add error handling and logging
-// const parser = new Parser({
-//   timeout: 5000,
-//   maxRedirects: 3,
-// });
-
-// export async function fetchNewsFromSources() {
-//   const allNews = [];
-
-//   for (const source of NEWS_SOURCES) {
-//     try {
-//       const news = source.type === 'rss' 
-//         ? await fetchRSSNews(source)
-//         : await scrapeNews(source);
-//       allNews.push(...news);
-//     } catch (error) {
-//       console.error(`Error fetching news from ${source.name}:`, error);
-//     }
-//   }
-
-//   return allNews;
-// }

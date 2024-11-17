@@ -3,7 +3,7 @@ import { Flame, FireExtinguisher, Bell, AlertTriangle } from 'lucide-react';
 import { NewsCard } from './components/NewsCard';
 import { NewsFilter } from './components/NewsFilter';
 import { NewsletterForm } from './components/NewsletterForm';
-import { Map } from './components/Map';
+import  Map from './components/Map';
 import { FireDashboard } from './components/FireDashboard';
 import { useNews } from './hooks/useNews';
 
